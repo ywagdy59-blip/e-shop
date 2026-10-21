@@ -7,6 +7,16 @@ const { OAuth2Client } = require("google-auth-library");
 const User = require("../models/user");
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+// =====================================
+// HELPERS
+// =====================================
+const MIN_PASSWORD_LENGTH = 6; // لو بتستخدم Joi بـ 8 خليهم نفس الرقم
+const MAX_PASSWORD_LENGTH = 128;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// حقول ما ينفعش ترجع للفرونت أبداً
+const SAFE_USER_FIELDS = "-password -passwordResetToken -passwordResetExpires";
+
 // شكل اليوزر اللي بيرجع للفرونت (من غير الباسورد)
 const userResponse = (user) => ({
   id: user._id,
@@ -17,6 +27,11 @@ const userResponse = (user) => ({
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
+const sha256 = (value) =>
+  crypto.createHash("sha256").update(value).digest("hex");
+
+const isDuplicateKeyError = (err) => err && err.code === 11000;
+
 const createToken = (user) =>
   jwt.sign(
     { id: user._id.toString(), role: user.role },
@@ -26,7 +41,23 @@ const createToken = (user) =>
 
 // صاحب الحساب أو الأدمن بس
 const canAccessUser = (req) =>
-  req.user.role === "admin" || req.user.id === req.params.id;
+  req.user.role === "admin" || String(req.user.id) === req.params.id;
+
+// تحقق موحد للباسورد (بيتأكد إنه string الأول)
+const assertValidPassword = (res, password) => {
+  if (typeof password !== "string" || !password) {
+    res.status(400);
+    throw new Error("Enter a password.");
+  }
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    res.status(400);
+    throw new Error(`Your password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    res.status(400);
+    throw new Error(`Your password must be no longer than ${MAX_PASSWORD_LENGTH} characters.`);
+  }
+};
 
 // =====================================
 // REGISTER  -  POST /api/users/register
@@ -49,27 +80,14 @@ const registerUser = asyncHandler(async (req, res) => {
     res.status(400);
     throw new Error("Enter your email address.");
   }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+  if (!EMAIL_REGEX.test(normalizedEmail)) {
     res.status(400);
     throw new Error("Enter a valid email address, for example name@example.com.");
   }
 
-  if (typeof password !== "string" || !password) {
-    res.status(400);
-    throw new Error("Enter a password.");
-  }
-
-  if (password.length < 6) {
-    res.status(400);
-    throw new Error("Your password must be at least 6 characters.");
-  }
-  if (password.length > 128) {
-    res.status(400);
-    throw new Error("Your password must be no longer than 128 characters.");
-  }
+  assertValidPassword(res, password);
 
   const existingUser = await User.findOne({ email: normalizedEmail });
-
   if (existingUser) {
     res.status(409);
     throw new Error("An account with this email already exists. Sign in or use a different email.");
@@ -77,12 +95,22 @@ const registerUser = asyncHandler(async (req, res) => {
 
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  const user = await User.create({
-    name: normalizedName,
-    email: normalizedEmail,
-    password: hashedPassword,
-    role: "user" // التسجيل دايماً user، الأدمن بيتعمل من الـ seed
-  });
+  let user;
+  try {
+    user = await User.create({
+      name: normalizedName,
+      email: normalizedEmail,
+      password: hashedPassword,
+      role: "user" // التسجيل دايماً user، الأدمن بيتعمل من الـ seed
+    });
+  } catch (err) {
+    // طلبين بنفس الإيميل في نفس اللحظة
+    if (isDuplicateKeyError(err)) {
+      res.status(409);
+      throw new Error("An account with this email already exists. Sign in or use a different email.");
+    }
+    throw err;
+  }
 
   res.status(201).json({
     success: true,
@@ -92,6 +120,9 @@ const registerUser = asyncHandler(async (req, res) => {
   });
 });
 
+// =====================================
+// GOOGLE ADMIN LOGIN
+// =====================================
 const googleAdminLogin = asyncHandler(async (req, res) => {
   const { credential } = req.body;
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -111,7 +142,7 @@ const googleAdminLogin = asyncHandler(async (req, res) => {
   try {
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
-      audience: clientId,
+      audience: clientId
     });
     payload = ticket.getPayload();
   } catch {
@@ -135,7 +166,7 @@ const googleAdminLogin = asyncHandler(async (req, res) => {
     success: true,
     message: "Administrator sign-in successful",
     token: createToken(user),
-    user: userResponse(user),
+    user: userResponse(user)
   });
 });
 
@@ -146,14 +177,18 @@ const loginUser = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const normalizedEmail = normalizeEmail(email);
 
-  if (!normalizedEmail || !password) {
+  if (!normalizedEmail || typeof password !== "string" || !password) {
     res.status(400);
     throw new Error("Email and password are required");
   }
 
   const user = await User.findOne({ email: normalizedEmail });
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
+  // user.password ممكن يبقى فاضي (مثلاً حساب اتعمل من برّه)، فبنتأكد قبل compare
+  const passwordOk =
+    user && user.password && (await bcrypt.compare(password, user.password));
+
+  if (!passwordOk) {
     res.status(401);
     throw new Error("Invalid email or password");
   }
@@ -167,7 +202,7 @@ const loginUser = asyncHandler(async (req, res) => {
 });
 
 // =====================================
-// FORGOT / RESET PASSWORD (development-safe reset link)
+// FORGOT / RESET PASSWORD
 // =====================================
 const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
@@ -178,39 +213,53 @@ const forgotPassword = asyncHandler(async (req, res) => {
     throw new Error("Email is required");
   }
 
+  // نفس الرد في كل الحالات، عشان محدش يعرف إيميل مسجل ولا لأ
+  const genericResponse = {
+    success: true,
+    message: "If an account exists for this email, a reset link has been prepared."
+  };
+
   const user = await User.findOne({ email: normalizedEmail });
-  // Do not reveal whether an email belongs to an account.
-  if (!user) return res.status(200).json({ success: true, message: "If the account exists, a reset link has been prepared." });
+  if (!user) return res.status(200).json(genericResponse);
 
   const resetToken = crypto.randomBytes(32).toString("hex");
-  user.passwordResetToken = crypto.createHash("sha256").update(resetToken).digest("hex");
-  user.passwordResetExpires = Date.now() + 15 * 60 * 1000;
+  user.passwordResetToken = sha256(resetToken);
+  user.passwordResetExpires = new Date(Date.now() + 15 * 60 * 1000);
   await user.save({ validateBeforeSave: false });
 
-  const response = { success: true, message: "A password reset link has been prepared." };
-  // Email delivery has not been configured in this local project. Expose the link only outside production for testing.
-  if (process.env.NODE_ENV !== "production") {
-    response.resetUrl = `${process.env.CLIENT_URL || "http://localhost:5173"}/reset-password?token=${resetToken}`;
+  // الإيميل لسه مش متظبط. اللينك بيتعرض في development بس (مش "أي حاجة غير production")
+  // عشان لو NODE_ENV مش متحدد على السيرفر ما يتسربش اللينك لأي حد.
+  if (process.env.NODE_ENV === "development") {
+    genericResponse.resetUrl = `${process.env.CLIENT_URL || "http://localhost:5173"}/reset-password?token=${resetToken}`;
   }
-  res.status(200).json(response);
+
+  res.status(200).json(genericResponse);
 });
 
 const resetPassword = asyncHandler(async (req, res) => {
   const { token, password } = req.body;
-  if (!token || !password || password.length < 6) {
+
+  if (typeof token !== "string" || !token) {
     res.status(400);
-    throw new Error("A valid token and a password of at least 6 characters are required");
+    throw new Error("A valid reset token is required");
   }
-  const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
-  const user = await User.findOne({ passwordResetToken: hashedToken, passwordResetExpires: { $gt: Date.now() } });
+  assertValidPassword(res, password);
+
+  const user = await User.findOne({
+    passwordResetToken: sha256(token),
+    passwordResetExpires: { $gt: new Date() }
+  });
+
   if (!user) {
     res.status(400);
     throw new Error("This reset link is invalid or has expired");
   }
+
   user.password = await bcrypt.hash(password, 10);
   user.passwordResetToken = undefined;
   user.passwordResetExpires = undefined;
   await user.save();
+
   res.status(200).json({ success: true, message: "Password reset successfully" });
 });
 
@@ -218,7 +267,7 @@ const resetPassword = asyncHandler(async (req, res) => {
 // GET ME  -  GET /api/users/me
 // =====================================
 const getMe = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user.id).select("-password");
+  const user = await User.findById(req.user.id).select(SAFE_USER_FIELDS);
 
   if (!user) {
     res.status(404);
@@ -232,7 +281,7 @@ const getMe = asyncHandler(async (req, res) => {
 // GET ALL USERS  -  GET /api/users  (Admin)
 // =====================================
 const getUsers = asyncHandler(async (req, res) => {
-  const users = await User.find().select("-password").sort({ createdAt: -1 });
+  const users = await User.find().select(SAFE_USER_FIELDS).sort({ createdAt: -1 });
 
   res.status(200).json({
     success: true,
@@ -250,7 +299,7 @@ const getUserById = asyncHandler(async (req, res) => {
     throw new Error("Not allowed");
   }
 
-  const user = await User.findById(req.params.id).select("-password");
+  const user = await User.findById(req.params.id).select(SAFE_USER_FIELDS);
 
   if (!user) {
     res.status(404);
@@ -278,23 +327,33 @@ const updateUser = asyncHandler(async (req, res) => {
 
   const { name, email, password, role } = req.body;
 
-  if (name) user.name = String(name).trim();
-
-  const normalizedEmail = normalizeEmail(email);
-  if (normalizedEmail && normalizedEmail !== user.email) {
-    const emailTaken = await User.findOne({ email: normalizedEmail });
-    if (emailTaken) {
+  if (name) {
+    const trimmedName = typeof name === "string" ? name.trim() : "";
+    if (trimmedName.length < 2 || trimmedName.length > 50) {
       res.status(400);
-      throw new Error("Email already exists");
+      throw new Error("Your name must be between 2 and 50 characters.");
     }
-    user.email = normalizedEmail;
+    user.name = trimmedName;
+  }
+
+  if (email) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
+      res.status(400);
+      throw new Error("Enter a valid email address, for example name@example.com.");
+    }
+    if (normalizedEmail !== user.email) {
+      const emailTaken = await User.findOne({ email: normalizedEmail });
+      if (emailTaken) {
+        res.status(409);
+        throw new Error("Email already exists");
+      }
+      user.email = normalizedEmail;
+    }
   }
 
   if (password) {
-    if (password.length < 6) {
-      res.status(400);
-      throw new Error("Password must be at least 6 characters");
-    }
+    assertValidPassword(res, password);
     user.password = await bcrypt.hash(password, 10);
   }
 
@@ -303,7 +362,15 @@ const updateUser = asyncHandler(async (req, res) => {
     user.role = role;
   }
 
-  await user.save();
+  try {
+    await user.save();
+  } catch (err) {
+    if (isDuplicateKeyError(err)) {
+      res.status(409);
+      throw new Error("Email already exists");
+    }
+    throw err;
+  }
 
   res.status(200).json({
     success: true,
