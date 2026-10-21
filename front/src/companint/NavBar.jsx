@@ -44,13 +44,6 @@ const NavBar = () => {
                 {t("shop")}
               </NavLink>
             </li>
-            {isAdmin && (
-              <li className="nav-item">
-                <NavLink className="nav-link fw-bold" to="/admin">
-                  {t("admin")}
-                </NavLink>
-              </li>
-            )}
           </ul>
 
           <ul className="navbar-nav ms-auto align-items-lg-center gap-lg-2">
