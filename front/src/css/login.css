@@ -1,0 +1,117 @@
+.login-page {
+  min-height: calc(100vh - 170px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 20px;
+  background:
+    linear-gradient(120deg, rgba(48, 38, 33, 0.82), rgba(76, 55, 45, 0.34)),
+    url("https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1800&q=85") center / cover;
+}
+
+.login-box {
+  width: min(100%, 420px);
+  padding: 38px 34px 28px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.48);
+  border-radius: 4px;
+  box-shadow: 0 24px 60px rgba(30, 22, 18, 0.24);
+  transform: translateX(0) scale(1);
+  transition: box-shadow 0.25s ease;
+}
+
+.login-box:hover {
+  box-shadow: 0 28px 70px rgba(30, 22, 18, 0.28);
+}
+
+.login-box h1 {
+  margin-bottom: 1.5rem;
+  font-size: 2rem;
+  font-weight: 700;
+  text-align: center;
+  color: var(--ink);
+}
+
+.login-box .form-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 0.5rem;
+}
+
+.login-box .form-control {
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  font-size: 0.96rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.login-box .form-control:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.2rem rgba(191, 134, 104, 0.15);
+}
+
+.login-box .btn-primary {
+  min-height: 48px;
+  border: none;
+  border-radius: 3px;
+  font-weight: 600;
+  background: var(--forest);
+  box-shadow: none;
+}
+
+.login-box .btn-primary:hover {
+  background: var(--forest-dark);
+}
+
+.login-box .alert {
+  border-radius: 4px;
+  font-size: 0.92rem;
+}
+
+.login-box .text-center {
+  text-align: center;
+}
+
+.login-box p {
+  margin-top: 1rem;
+  color: var(--muted);
+}
+
+.demo-login-card {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  background: var(--cream);
+}
+
+.demo-login-card p {
+  margin-top: 0;
+}
+
+.demo-login-card code {
+  color: var(--forest-dark);
+  overflow-wrap: anywhere;
+}
+
+.login-box a {
+  color: var(--accent-dark);
+  font-weight: 600;
+}
+
+.login-box a:hover {
+  color: var(--forest-dark);
+}
+
+@media (max-width: 480px) {
+  .login-box {
+    padding: 26px 18px 20px;
+    border-radius: 4px;
+  }
+
+  .login-box h1 {
+    font-size: 1.7rem;
+  }
+}
